@@ -10,13 +10,16 @@ public class ReadingsController : ControllerBase
 {
     private readonly DeviceSecretValidatorService _secretValidator;
     private readonly AlertService _alertService;
+    private readonly FirmwareValidatorService _firmwareValidatorService;
 
     public ReadingsController(
         DeviceSecretValidatorService secretValidator, 
-        AlertService alertService)
+        AlertService alertService,
+        FirmwareValidatorService firmwareValidatorService)
     {
         _secretValidator = secretValidator;
         _alertService = alertService;
+        _firmwareValidatorService = firmwareValidatorService;
     }
 
     /// <summary>
@@ -34,16 +37,27 @@ public class ReadingsController : ControllerBase
     /// <param name="deviceReadingRequest">Sensor information and extra metadata from device.</param>
     [HttpPost("evaluate")]
     public ActionResult<IEnumerable<Alert>> EvaluateReading(
-        string deviceSecret,
         [FromBody] DeviceReadingRequest deviceReadingRequest)
     {
-        if (!_secretValidator.ValidateDeviceSecret(deviceSecret))
+        if(Request.Headers.TryGetValue("x-device-shared-secret", out var deviceSecret))
         {
-            return Problem(
-                detail: "Device secret is not within the valid range.",
-                statusCode: StatusCodes.Status401Unauthorized);
+            if (!_secretValidator.ValidateDeviceSecret(deviceSecret))
+            {
+                return Problem(
+                    detail: "Device secret is not within the valid range.",
+                    statusCode: StatusCodes.Status401Unauthorized);
+            }
+            if (!_firmwareValidatorService.ValidateFirmware(deviceReadingRequest.FirmwareVersion))
+            {
+                var validatonProblemDetails = new ValidationProblemDetails();
+                validatonProblemDetails.Errors.Add("FirmwareVersion", new string[] { "The firmware value does not match semantic versioning format." });
+                return BadRequest(validatonProblemDetails);
+            }
+            return Ok(_alertService.GetAlerts(deviceReadingRequest));
         }
 
-        return Ok(_alertService.GetAlerts(deviceReadingRequest));
+        return Problem(
+            detail: "Device secret is missing.",
+            statusCode: StatusCodes.Status401Unauthorized);
     }
 }
